@@ -6,7 +6,7 @@ Dun Dun Dungeon is a persistent role-playing game inside ChatGPT. You create a c
 
 ChatGPT interprets player intent and narrates the outcome. A Cloudflare Worker exposes the game through MCP, assembles the context for each turn, and runs the rules engine. Supabase stores characters, authored dungeons, runs, and rewards.
 
-The examples below follow one fictional dungeon, *The Bell Below*. They use the game's real block names and tool fields with invented content and abridged payloads.
+The walkthrough uses *The Dame in the Rain*, a published noir dungeon. The story, opening puzzle, and voice are drawn from the authored dungeon. Payloads are abridged, and the sample player turns and outcomes illustrate how the system can respond. The walkthrough reveals the first room's clue.
 
 ### 1. A builder authors the adventure
 
@@ -14,15 +14,15 @@ The builder workflow saves the story and voice as one checkpoint and rooms as an
 
 **Story**
 
-A harbor's warning bell rings from beneath a shuttered tide station. Each chamber reveals how the station once diverted floodwater. In the finale, the player must decide what to protect when the water reaches the old floodgate.
+A private eye takes a missing-husband case. As the investigation progresses, the detective begins to suspect the husband is hiding from the woman who hired them.
 
 **Room**
 
-In the Signal Chamber, three bronze plates control a locked sluice. Water is rising through the floor grates. The player needs to open the sluice before the chamber floods.
+In **The Cold-Water Flat**, the detective searches the missing husband's apartment. Someone has already been through it. The goal is to find out where he went.
 
 **Puzzle notes**
 
-The plates represent the warning signals for boats at different depths. A line of old tide marks gives the order. The narrator can respond to a player studying the marks or comparing signals while leaving the answer for the player to discover.
+The magazines beside the well-worn chair include one mailed to Room 312 at the Halcyon Arms, near the Blue Saint Lounge. That address is the clue the narrator can reveal as the player investigates.
 
 ### 2. Starting a run gives the narrator the current scene
 
@@ -30,33 +30,31 @@ After the player picks a character and dungeon, `start_run` opens the entryway. 
 
 ```text
 [SCENE]
-Dungeon story: A harbor's warning bell rings from beneath a shuttered tide station.
-Room: Signal Chamber — puzzle
-Summary: Three bronze signal plates control a locked sluice.
-Setup: Water wells up through the floor grates. Old tide marks score the wall.
-Room goal: Open the sluice.
-Character: Mara, level 2 rogue.
+Dungeon story: A private eye takes a missing-husband case.
+Room: The Cold-Water Flat — puzzle
+Summary: The husband's apartment was left in a hurry and has already been searched.
+Setup: Drawers hang open. By the radiator, a stack of magazines and unpaid bills has been disturbed.
+Room goal: Figure out where the husband went.
 
 [DM NOTES - DO NOT NARRATE]
-Secret: The plates represent boat warning signals for different depths.
-Happy path: Match the plates to the tide marks in order.
+Secret: A magazine points to a second address near the Blue Saint Lounge.
+Happy path: Inspect the worn chair and look through the magazine stack for the mailing address.
 
 [VOICE]
 DUNGEON VOICE
-register: eerie
-style: harbor watch
-instruction: Describe the danger through physical details.
-             Treat the old machinery with the gravity of a public official.
+register: wry
+style: hardboiled noir
+instruction: Use a world-weary first-person narrator. Open on a specific detail.
+             Keep sentences lean and let a concrete fact end the scene.
 examples:
-- The smallest plate rang first. Under the grate, something rang back.
-- The sluice had held all winter. The tide was asking for another hour.
+- I took her money. It smelled wrong, like flowers somebody bought to cover something, and I took it anyway.
 ```
 
-The narrator might say, *“Water pushed through the grate, one square at a time. Three bronze plates stood beside the locked sluice. The wall above them was scored with old tide marks. What do you do?”* The player hears a situation they can act on. The model has the additional facts it needs to judge how their ideas fit the scene. The DM notes are guidance about what to reveal in play.
+The narrator might say, *“I pushed the door open. Three drawers stood out from the dresser. Somebody had cut the mattress. Beside the radiator, the papers had been moved. What do you look at first?”* The player hears a situation they can act on. The model has the additional facts it needs to judge how their ideas fit the scene. The DM notes are guidance about what to reveal in play.
 
 ### 3. A freeform reply becomes a rules-engine action
 
-The player says, *“I study the markings and compare them with the symbols on the plates.”* The model can map that attempt to Perception and send the current run sequence. The engine evaluates the approach against the room and character, applies the result to the run, and returns the outcome. Progress, damage, and room clearance are separate facts.
+The player says, *“I check the chair and look through the papers beside it for a name or an address.”* The model can map that attempt to Perception and send the current run sequence. The engine evaluates the approach against the room and character, applies the result to the run, and returns the outcome. Progress, damage, and room clearance are separate facts.
 
 ```json
 {
@@ -67,7 +65,7 @@ The player says, *“I study the markings and compare them with the symbols on t
     "action_sequence": 7,
     "action_params": {
       "skill": "perception",
-      "summary": "Compare the tide marks with the bronze plate symbols."
+      "summary": "Search the chair and nearby papers for a name or address."
     }
   }
 }
@@ -85,7 +83,7 @@ damage: 0
 Narrate the outcome in DUNGEON VOICE.
 ```
 
-*“The marks counted depths. The plates counted boats. You found where the two systems met, though one plate still refused to make sense.”* The immediate action moved the puzzle forward. The sluice is still shut, so the player gets another turn in the same room.
+*“I picked the bills out of the pile. Same name, same address. The magazines underneath had been thumbed through until the spines split.”* The immediate action moved the puzzle forward. The detective has narrowed the search, and the player gets another turn to examine the magazines.
 
 ### 4. The tool response governs what can happen next
 
@@ -111,7 +109,7 @@ An abridged response when a returning player syncs an already-cleared room:
 }
 ```
 
-The host has enough information to present the cleared room and advance on the player's reply. This recovery path reads the run without replaying the room or granting rewards again. For actions that advance the run, the database update can require the expected action sequence. That prevents two competing writes from both advancing from the same turn.
+In this dungeon, continuing from the flat takes the detective to The Rain-Slick Block, where they notice someone following them. The host has enough information to present the cleared room and advance on the player's reply. This recovery path reads the run without replaying the room or granting rewards again. For actions that advance the run, the database update can require the expected action sequence. That prevents two competing writes from both advancing from the same turn.
 
 ### 5. The run ends and the character persists
 
