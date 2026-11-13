@@ -1,53 +1,65 @@
 # Dun Dun Dungeon
 
-I built Dun Dun Dungeon as a role-playing game inside ChatGPT. Players describe what they want to do in their own words, explore authored dungeons, and keep their characters and equipment between runs. Players can also build dungeons for others.
+Dun Dun Dungeon is a persistent role-playing game inside ChatGPT. Players describe actions in their own words, decide whether to press deeper into a dungeon, and carry their characters and equipment between runs. Players can also author dungeons for others.
 
-[Watch the gameplay demo](https://nate-polland.github.io/dun-dun-dungeon-demo/) · [Read the technical case study](#technical-case-study)
+## Technical architecture
 
-The 11-minute recording shows a new character entering *The Dame in the Rain* and playing through puzzles, hazards, and combat.
-
-## Technical case study
-
-### One turn, from player intent to persistent state
-
-Suppose a player asks whether they can use a prop in the room to get past a hazard. The model interprets their intent using the current room and character context. When the player commits to an action, the model calls an MCP tool with the action and its parameters. A Cloudflare Worker resolves the action against the game's rules and run state. Supabase stores the run and character state. The tool returns the outcome and available next actions, which the model turns into narration.
+The game separates conversational intent, authored story, and game state. ChatGPT interprets what the player wants to do and narrates the result. A Cloudflare Worker exposes gameplay operations through MCP, and the rules engine determines what happens. Supabase stores the durable state, including characters, dungeon definitions, runs, and rewards.
 
 ```mermaid
 sequenceDiagram
     actor Player
-    participant ChatGPT as ChatGPT narrator
-    participant Engine as MCP Worker and game engine
+    participant ChatGPT as ChatGPT
+    participant Worker as MCP Worker
+    participant Rules as Game rules
     participant DB as Supabase
-    Player->>ChatGPT: Describe an action in their own words
-    ChatGPT->>Engine: Call the gameplay tool
-    Engine->>DB: Read the current room, run, and character
-    Engine->>Engine: Resolve the action under the game rules
-    Engine->>DB: Persist the result when state changes
-    Engine-->>ChatGPT: Outcome, narration context, and legal next step
-    ChatGPT-->>Player: Narrate the result and wait for a choice
+    Player->>ChatGPT: Describe an action
+    ChatGPT->>Worker: Call a gameplay tool with action parameters
+    Worker->>DB: Load the run, character, and dungeon
+    Worker->>Rules: Resolve the action against the current room
+    Rules-->>Worker: Outcome and state changes
+    Worker->>DB: Save changes when the action advances state
+    Worker-->>ChatGPT: Outcome, scene context, and next legal actions
+    ChatGPT-->>Player: Narrate the result and present the next decision
 ```
 
-That division makes an open-ended conversation playable as a game. The model has room to improvise dialogue and describe the scene. The engine decides what a roll means, whether a room is cleared, and when to apply damage or rewards. Authored content gives the narrator the scene, facts to reveal at the right moment, and a voice to sustain across turns.
+### MCP is the interface between narration and the game
 
-The same boundary matters when a run ends. The game carries the next operation in the tool response so the host can continue through settlement, trait recording, and eligible loot even if earlier turns have dropped out of context.
+Consider a player who asks whether a prop in the room could help them get past a hazard. ChatGPT interprets the idea in the context of that room. If the player commits to an action, the model calls the tool with structured parameters. The engine checks the action against the current run and resolves the attempt using the applicable game mechanics. The returned outcome gives ChatGPT the facts it needs to narrate the consequence.
 
-### Two development decisions
+The response also carries a structured `next` instruction. It can tell the host to wait for the player, present a choice, call a follow-up tool, or finish the interaction. A follow-up includes its tool and arguments. After a run ends, the host can use this contract to proceed through settlement, trait recording, and eligible loot even if the earlier conversation has been compacted.
 
-**Keep first-run coaching when a player resumes.** On a first run, clearing a room can lead to a short coaching exchange before the next room. A recovery path for already-cleared rooms routed straight to the next room, which skipped that exchange. I made recovery return the appropriate next operation for the saved run. A regression test exercises both sync and a repeated choice, for both first-time and returning players, and verifies that recovery writes no new run state or rewards.
+For example, an abridged response for a cleared room on a returning player’s run looks like this:
 
-The core of the test, abridged to show the behavior:
-
-```js
-expect(result.status).toBe('room_already_cleared');
-expect(result.next.resume.tool).toBe(firstRun ? 'grimble_tip' : 'take_action');
-expect(db.updateRun).not.toHaveBeenCalled();
-expect(db.completeRunAndApplyRewards).not.toHaveBeenCalled();
+```json
+{
+  "status": "room_already_cleared",
+  "state": { "action_sequence": 8, "first_run": false },
+  "render": { "transition": "room_cleared" },
+  "next": {
+    "kind": "wait_for_player",
+    "resume": {
+      "tool": "take_action",
+      "arguments": { "run_id": "example-run", "action": "continue" }
+    }
+  }
+}
 ```
 
-**Preserve authored context across MCP clients.** An earlier response format removed some scene and voice context from the structured response to avoid duplicating it in the text response. Clients that passed only structured content to the model then lost information they needed to narrate the room. I changed the Worker to build one narration packet and carry it in both response forms. The transport test checks that the two copies match and that scene context survives across room and boss transitions.
+The host can show the room as cleared and wait for the player’s decision. If the player chooses to move on, the response already gives the host the exact next operation.
 
-### How I test it
+### Persistent state makes recovery part of gameplay
 
-I test the engine rules and tool responses in code, then use live playthroughs to check what the player experiences. The automated tests cover things like whether a displayed option maps to a legal next action and whether a recovery path can apply a reward twice. Playthroughs check whether the narrator sustains the authored voice, gives players enough information to act, and reveals discoveries at the right time. Both layers matter when a correct state transition can still produce a confusing scene.
+The game has to handle a player reconnecting, a client retrying, or the model acting on an older turn. The run carries an action sequence. When a request supplies a sequence that no longer matches, the Worker returns a stale-action result. The database update also uses the expected sequence as a condition when advancing it, so competing writes cannot both advance from the same turn.
 
-[Watch a complete gameplay walkthrough](https://nate-polland.github.io/dun-dun-dungeon-demo/) · [Game website](https://dun-dun-dungeon.nathanpolland.workers.dev) · [Support](https://dun-dun-dungeon.nathanpolland.workers.dev/support)
+Recovery has its own behavior. If a room was already cleared, a sync or repeated choice returns the cleared status, current action sequence, and next legal step. On a first run, that can mean routing to between-room coaching. On subsequent runs, it can mean offering to continue. The recovery path does not replay the check or award rewards. A regression test exercises both entry points for both types of run and checks that neither writes to the run or completes it again.
+
+### Authored story travels with the turn
+
+Dungeon content provides the scene, voice, and facts the narrator needs to reveal as play progresses. Game state establishes what has already happened, such as whether a room is cleared or a discovery has been made. The Worker assembles the narration context for the current turn so the model can tell a story grounded in the actual outcome.
+
+One transport change removed scene and voice instructions from the structured response because the text response already carried them. That broke the assumption that the model sees both forms. Some MCP clients supplied only structured content. The Worker now builds one narration packet and includes it in both forms. A transport regression test checks that the copies match and that scene context survives room and boss transitions.
+
+### What I verify before shipping
+
+Automated checks cover game rules, tool responses, state transitions, and recovery. Live playthroughs check things that a state assertion cannot settle on its own, such as whether a room gives players enough information to make a choice, whether discoveries arrive at the right time, and whether the narrator sustains the authored voice.
